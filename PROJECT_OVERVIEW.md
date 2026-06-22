@@ -529,6 +529,376 @@ Customer Churn MAS Project/
 
 ---
 
+## Compatible Datasets
+
+This system is not limited to the Telco dataset. Any customer dataset that follows the
+pattern of **demographic + behavioural features → binary churn target** can be plugged in
+with changes only to `src/config.py` (column names) and optionally
+`src/agents/feature_engineering.py` (domain-specific derived features).
+
+---
+
+### 1. IBM Telco Customer Churn ← currently in use
+
+| Property | Detail |
+|---|---|
+| Source | [Kaggle — IBM Sample Data](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) |
+| Size | 7,043 rows × 21 features |
+| Target | `Churn` — Yes / No |
+| Domain | Telecommunications |
+
+**Key predictors:** `Contract` type (month-to-month customers churn most), `tenure`,
+`MonthlyCharges`, `InternetService` type, and the engineered `payment_behavior`.
+
+**How it's used:** No changes needed — this is the default schema the system is built around.
+
+---
+
+### 2. Bank / Financial Customer Churn
+
+| Property | Detail |
+|---|---|
+| Source | [Kaggle — Bank Customer Churn](https://www.kaggle.com/datasets/shubhendra7/bank-customer-churn) |
+| Size | ~10,000 rows × 14 features |
+| Target | `Exited` — 1 (churned) / 0 (stayed) |
+| Domain | Retail banking |
+
+**Key features:** `CreditScore`, `Geography`, `Gender`, `Age`, `Tenure`,
+`Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary`
+
+**How to adapt:**
+
+1. In `config.py`, update:
+   ```python
+   TARGET_COLUMN         = "Exited"
+   NUMERIC_COLUMNS       = ["CreditScore", "Age", "Tenure", "Balance", "EstimatedSalary"]
+   CATEGORICAL_COLUMNS   = ["Geography", "Gender", "HasCrCard", "IsActiveMember", "NumOfProducts"]
+   REQUIRED_COLUMNS      = [...]  # list all feature columns
+   ```
+2. In `feature_engineering.py`, replace the telecom-specific features with:
+   - `balance_salary_ratio = Balance / max(EstimatedSalary, 1)` — wealth relative to income
+   - `products_per_year = NumOfProducts / max(Tenure, 1)` — product uptake speed
+   - `activity_score` — combining `IsActiveMember` + `NumOfProducts`
+
+**What churn means here:** The customer closed their bank account or moved to a competitor.
+
+---
+
+### 3. E-commerce / Retail Customer Churn
+
+| Property | Detail |
+|---|---|
+| Source | [Kaggle — E-Commerce Churn](https://www.kaggle.com/datasets/ankitverma2010/ecommerce-customer-churn-analysis-and-prediction) |
+| Size | ~5,630 rows × 20 features |
+| Target | `Churn` — 1 / 0 |
+| Domain | Online retail |
+
+**Key features:** `Tenure`, `WarehouseToHome` (delivery distance), `NumberOfDeviceRegistered`,
+`SatisfactionScore`, `NumberOfAddress`, `Complain`, `OrderAmountHikeFromLastYear`,
+`CouponUsed`, `OrderCount`, `DaySinceLastOrder`, `CashbackAmount`
+
+**How to adapt:**
+
+1. Update `config.py` with the e-commerce column names
+2. Feature engineering opportunities:
+   - `recency_score = DaySinceLastOrder` (lower = more engaged)
+   - `order_frequency = OrderCount / max(Tenure, 1)`
+   - `complaint_rate = Complain / max(OrderCount, 1)`
+   - `coupon_dependency = CouponUsed / max(OrderCount, 1)` — customers who only buy on discount churn when offers stop
+
+**What churn means here:** The customer stopped purchasing on the platform for a defined
+period (usually 30–90 days of inactivity).
+
+---
+
+### 4. SaaS / Subscription Churn
+
+| Property | Detail |
+|---|---|
+| Source | Build from your own product analytics or use open datasets like [KKBox Music Churn](https://www.kaggle.com/competitions/kkbox-churn-prediction-challenge) |
+| Typical size | 10k–1M rows |
+| Target | `churned` — 1 / 0 |
+| Domain | Software-as-a-Service |
+
+**Typical features:** `plan_type`, `monthly_revenue`, `days_since_last_login`,
+`feature_usage_count`, `support_tickets_opened`, `sessions_last_30_days`,
+`team_size`, `contract_length`, `payment_failures`
+
+**How to adapt:**
+
+1. Update config column lists as usual
+2. Feature engineering — this domain has the richest signal:
+   - `login_recency = days_since_last_login` — most powerful single predictor in SaaS
+   - `feature_adoption = features_used / total_features` — breadth of product use
+   - `support_friction = support_tickets / max(sessions, 1)` — high friction → churn risk
+   - `expansion_trend` — month-over-month revenue change (shrinking = at-risk)
+
+**What churn means here:** The customer cancelled their subscription or did not renew.
+
+---
+
+### 5. Insurance Customer Churn
+
+| Property | Detail |
+|---|---|
+| Source | Internal CRM exports or [Kaggle Insurance datasets](https://www.kaggle.com/datasets/ranja7/vehicle-insurance-customer-data) |
+| Typical size | 5k–50k rows |
+| Target | `Policy_Lapsed` or `Not_Renewed` — 1 / 0 |
+| Domain | Property & casualty / life insurance |
+
+**Typical features:** `Policy_Type`, `Premium_Amount`, `Claim_Count`, `Customer_Age`,
+`Vehicle_Age`, `Annual_Premium`, `Days_Policy_Customer`, `Policy_Sales_Channel`,
+`Region_Code`, `Previously_Insured`
+
+**How to adapt:**
+
+1. Update config column lists
+2. Feature engineering:
+   - `claims_per_year = Claim_Count / max(tenure_years, 1)` — high claimers may be non-renewed by the insurer
+   - `premium_trend` — whether the customer's premium has increased significantly
+   - `channel_type` — agent-sold vs. digital-sold (digital customers churn more)
+
+**What churn means here:** The customer let their policy lapse or moved to a competitor at
+renewal time.
+
+---
+
+### Summary — What Any Dataset Needs
+
+| Requirement | Why |
+|---|---|
+| A binary target column (0 / 1 or Yes / No) | The models are binary classifiers |
+| At least one numeric column | The `StandardScaler` step needs numeric input |
+| At least one categorical column | The `OneHotEncoder` step needs categorical input |
+| Consistent column names across train and predict CSVs | The saved pipeline's `ColumnTransformer` expects the exact same feature names at prediction time |
+| Minimum ~500 rows | Below this, the 80/20 train/test split leaves too few examples for reliable evaluation |
+
+---
+
+## How the Pipeline Processes Data — Step by Step
+
+This section walks through exactly what happens to a single row of customer data as it
+passes through each agent. We use a real example from the Telco dataset.
+
+### Raw input row (as it arrives in the CSV)
+
+```
+customerID       = "7590-VHVEG"
+gender           = "Female"
+SeniorCitizen    = 0
+Partner          = "Yes"
+Dependents       = "No"
+tenure           = 1
+PhoneService     = "No"
+MultipleLines    = "No phone service"     ← inconsistent label
+InternetService  = "DSL"
+OnlineSecurity   = "No"
+OnlineBackup     = "Yes"
+DeviceProtection = "No"
+TechSupport      = "No"
+StreamingTV      = "No"
+StreamingMovies  = "No"
+Contract         = "Month-to-month"
+PaperlessBilling = "Yes"
+PaymentMethod    = "Electronic check"
+MonthlyCharges   = 29.85
+TotalCharges     = " "                    ← blank string, not a number!
+Churn            = "Yes"
+```
+
+---
+
+### Stage 1 — Ingestion Agent
+
+**What it does:** Reads the CSV with `pd.read_csv()`, checks all required columns are
+present, counts nulls and duplicates.
+
+**What it passes on:** `raw_df` — a pandas DataFrame with 7,043 rows and 21 columns,
+exactly as read from disk. No values have been changed yet.
+
+```
+raw_df["TotalCharges"].dtype  →  object   (still a string)
+raw_df["Churn"].dtype         →  object   (still "Yes"/"No")
+```
+
+The agent logs: `[ingestion] Loaded 'file.csv' with 7043 rows, 21 columns. Missing columns: none.`
+
+---
+
+### Stage 2 — Cleaning Agent
+
+**What it does:** Four transformations applied in order:
+
+**Step 1 — Fix TotalCharges dtype**
+```python
+# pd.to_numeric(errors='coerce') converts the blank string to NaN
+TotalCharges: " "  →  NaN
+```
+
+**Step 2 — Impute missing values with median**
+```python
+# Median of TotalCharges across 7,043 rows ≈ 1397.47
+TotalCharges: NaN  →  1397.47
+```
+Median is chosen over mean because `TotalCharges` is right-skewed
+(long-tenure high-spend customers pull the mean up).
+
+**Step 3 — Normalise categorical labels**
+```python
+MultipleLines: "No phone service"  →  "No"
+# (same pattern for "No internet service" on other columns)
+```
+
+**Step 4 — Encode the target**
+```python
+Churn: "Yes"  →  1
+```
+
+**What it passes on:** `clean_df` — same 7,043 rows with corrected dtypes and a numeric target.
+
+The agent logs: `[cleaning] Cleaned dataset -> 7043 rows. Dropped 0 duplicates, imputed columns: ['TotalCharges'].`
+
+---
+
+### Stage 3 — Feature Engineering Agent
+
+**What it does:** Adds 6 new columns derived from the cleaned data.
+
+For our example row (`tenure=1`, `MonthlyCharges=29.85`, `TotalCharges=1397.47`):
+
+| New Feature | Formula | Value | Interpretation |
+|---|---|---|---|
+| `tenure_group` | bucket `tenure` into 4 bins | `"New"` | 1 month → brand-new customer |
+| `usage_intensity` | `MonthlyCharges / max(tenure, 1)` | `29.85` | Spending $29.85 per month of tenure |
+| `avg_monthly_spend` | `TotalCharges / max(tenure, 1)` | `1397.47` | Lifetime avg is inflated — new customer with imputed TotalCharges |
+| `num_streaming_services` | count "Yes" in [StreamingTV, StreamingMovies] | `0` | No streaming add-ons |
+| `num_security_services` | count "Yes" in [OnlineSecurity, OnlineBackup, DeviceProtection, TechSupport] | `1` | Only OnlineBackup = Yes |
+| `payment_behavior` | "automatic" in PaymentMethod? | `"Manual"` | Electronic check is manual |
+
+The DataFrame grows from 21 → 27 columns.
+
+The agent logs: `[feature_engineering] Added features: ['tenure_group', 'usage_intensity', ...]. Resulting shape: (7043, 27).`
+
+---
+
+### Stage 4 — Training Agent (train mode only)
+
+**What it does:** Splits the 7,043-row `feature_df` into train (80%) and test (20%) sets,
+fits three sklearn Pipelines, and selects the best by ROC-AUC.
+
+**Train/test split:**
+```
+Train: 5,634 rows  (stratified — preserves ~26% churn rate)
+Test:  1,409 rows
+```
+
+**Preprocessing (applied inside each Pipeline before fitting the classifier):**
+
+```
+Numeric columns (8 total):
+  tenure, MonthlyCharges, TotalCharges, SeniorCitizen,
+  usage_intensity, avg_monthly_spend, num_streaming_services, num_security_services
+  → SimpleImputer(median) → StandardScaler
+
+Categorical columns (19 total):
+  gender, Partner, Dependents, PhoneService, MultipleLines, InternetService,
+  OnlineSecurity, OnlineBackup, DeviceProtection, TechSupport, StreamingTV,
+  StreamingMovies, Contract, PaperlessBilling, PaymentMethod,
+  tenure_group, payment_behavior
+  → SimpleImputer(most_frequent) → OneHotEncoder(handle_unknown='ignore')
+```
+
+**What it passes on:** `model` (the best fitted Pipeline), `X_test`, `y_test`, `candidate_results`
+
+The agent logs one line per model: `[training] logistic_regression: ROC-AUC=0.8475, F1=0.6128`
+
+---
+
+### Stage 5 — Evaluation Agent (train mode only)
+
+**What it does:** Runs the best model on `X_test` (the 1,409 rows it has never seen),
+computes the full metric suite, and checks the quality gate.
+
+```
+y_proba = model.predict_proba(X_test)[:, 1]   ← churn probability for each test customer
+y_pred  = model.predict(X_test)                ← 0 or 1 threshold at 0.5
+
+Metrics:
+  accuracy  = 0.7381   (74% of predictions correct)
+  precision = 0.5043   (50% of flagged churners actually churned)
+  recall    = 0.7807   (78% of all actual churners were caught)
+  f1        = 0.6128   (harmonic mean of precision and recall)
+  roc_auc   = 0.8475   ✓ PASSES quality gate (≥ 0.70)
+```
+
+High recall (0.78) at the cost of precision (0.50) is intentional — the model is tuned with
+`class_weight='balanced'` to avoid missing churners, even if it flags some non-churners too.
+
+The agent logs: `[evaluation] logistic_regression -> ... roc_auc=0.8475. Quality gate (0.7) PASSED.`
+
+---
+
+### Stage 6 — Registry Agent (train mode only)
+
+**What it does:** Persists everything needed to use the model without retraining.
+
+```
+models/churn_model.pkl          ← joblib.dump(pipeline)
+models/model_metadata.json      ← metrics, model name, timestamp, feature columns
+models/reference_stats.json     ← mean/std/min/max per numeric column (for drift detection)
+MLflow registry                 ← new version of "customer_churn_classifier" registered
+```
+
+The agent logs: `[registry] Saved model to 'models/churn_model.pkl' and metadata to 'models/model_metadata.json'. MLflow registration: True.`
+
+---
+
+### Stage 7 — Prediction Agent (predict mode only)
+
+**What it does:** Loads `churn_model.pkl` from disk and calls `predict_proba()` on the
+feature-engineered DataFrame. No retraining happens — this is pure inference.
+
+```python
+pipeline  = joblib.load("models/churn_model.pkl")
+probas    = pipeline.predict_proba(X)[:, 1]
+
+# For our example row:
+churn_probability = 0.73   ← 73% chance this customer churns
+risk_level        = "High" ← ≥ 0.70 threshold
+```
+
+**Why reload the same pipeline instead of just the classifier?**
+The sklearn `Pipeline` object contains the fitted `ColumnTransformer` (with all learned
+`StandardScaler` means/stds and `OneHotEncoder` categories) as its first step. Loading the
+full Pipeline guarantees the same feature transformations that were applied during training
+are applied identically at inference time — no manual re-fitting needed.
+
+The agent logs: `[prediction] Scored 7043 customers. Risk distribution: {'High': 1142, 'Medium': 1492, 'Low': 4409}.`
+
+---
+
+### End-to-end data flow summary
+
+```
+CSV file
+  │
+  ▼ Ingestion ─────────────── raw_df (pandas DataFrame, original dtypes)
+  │
+  ▼ Cleaning ──────────────── clean_df (fixed dtypes, imputed nulls, encoded target)
+  │
+  ▼ Feature Engineering ───── feature_df (27 columns, 6 new derived features)
+  │
+  ▼ Training (train only) ─── model (fitted sklearn Pipeline), X_test, y_test
+  │
+  ▼ Evaluation (train only) ─ evaluation_report (metrics dict, passed bool)
+  │
+  ▼ Registry (train only) ─── churn_model.pkl + model_metadata.json on disk
+  │
+  ▼ Prediction (predict only) predictions_df (customerID, churn_probability, risk_level)
+```
+
+---
+
 ## How to Run
 
 ### 1. Train from the command line

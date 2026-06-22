@@ -8,11 +8,18 @@ import {
   Tooltip,
 } from "recharts";
 import { predictChurn } from "../api";
+import AgentConversation from "../components/AgentConversation";
+import AgentTimeline from "../components/AgentTimeline";
 import Card from "../components/Card";
 import ProbabilityBar from "../components/ProbabilityBar";
 import RiskBadge from "../components/RiskBadge";
 import Spinner from "../components/Spinner";
-import { CHART_TOOLTIP_STYLE, RISK_COLORS } from "../lib/constants";
+import {
+  CHART_TOOLTIP_STYLE,
+  PREDICTION_AGENTS,
+  RISK_COLORS,
+} from "../lib/constants";
+
 
 const PAGE_SIZE = 25;
 const RISK_FILTERS = ["All", "High", "Medium", "Low"];
@@ -38,6 +45,9 @@ export default function Predict() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [pipelineLogs, setPipelineLogs] = useState([]);
+  const [pipelineErrors, setPipelineErrors] = useState([]);
+  const [agentMessages, setAgentMessages] = useState([]);
 
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
@@ -45,19 +55,29 @@ export default function Predict() {
   const [page, setPage] = useState(0);
 
   const handlePredict = async () => {
-    if (!file) {
-      setError("Please choose a CSV file first.");
-      return;
-    }
+    if (!file) { setError("Please choose a CSV file first."); return; }
     setLoading(true);
     setError(null);
     setResult(null);
+    setPipelineLogs([]);
+    setPipelineErrors([]);
+    setAgentMessages([]);
     setPage(0);
     try {
       const res = await predictChurn(file);
       setResult(res.data);
+      setPipelineLogs(res.data.logs ?? []);
+      setAgentMessages(res.data.agent_messages ?? []);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message);
+      const detail = err.response?.data?.detail;
+      const errList = Array.isArray(detail)
+        ? detail
+        : detail
+        ? [detail]
+        : [err.message];
+      setError(errList.join("\n"));
+      if (Array.isArray(detail)) setPipelineErrors(detail);
+      setAgentMessages(err.response?.data?.agent_messages ?? []);
     } finally {
       setLoading(false);
     }
@@ -78,7 +98,9 @@ export default function Predict() {
     if (filter !== "All") rows = rows.filter((p) => p.risk_level === filter);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      rows = rows.filter((p) => String(p.customerID).toLowerCase().includes(q));
+      rows = rows.filter((p) =>
+        String(p.customerID).toLowerCase().includes(q)
+      );
     }
     return [...rows].sort((a, b) =>
       sortDir === "desc"
@@ -88,16 +110,15 @@ export default function Predict() {
   }, [result, filter, search, sortDir]);
 
   const pageCount = Math.max(1, Math.ceil(filteredPredictions.length / PAGE_SIZE));
-  const safePage = Math.min(page, pageCount - 1);
-  const pageRows = filteredPredictions.slice(
-    safePage * PAGE_SIZE,
-    (safePage + 1) * PAGE_SIZE
-  );
+  const safePage  = Math.min(page, pageCount - 1);
+  const pageRows  = filteredPredictions.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const hasActual = pageRows[0]?.actual_churn !== undefined;
 
   const setFilterAndReset = (v) => { setFilter(v); setPage(0); };
   const setSearchAndReset = (v) => { setSearch(v); setPage(0); };
   const toggleSort = () => { setSortDir((d) => (d === "desc" ? "asc" : "desc")); setPage(0); };
+
+  const showTimeline = loading || pipelineLogs.length > 0 || pipelineErrors.length > 0;
 
   return (
     <div className="space-y-6">
@@ -109,6 +130,7 @@ export default function Predict() {
         </p>
       </div>
 
+      {/* ── Controls ── */}
       <Card title="Customer data">
         <div className="flex flex-col sm:flex-row sm:items-center gap-4">
           <input
@@ -132,14 +154,35 @@ export default function Predict() {
         </div>
       </Card>
 
-      {error && (
-        <Card title="Prediction failed">
-          <p className="text-red-400 text-sm whitespace-pre-wrap">
-            {Array.isArray(error) ? error.join("\n") : String(error)}
-          </p>
+      {/* ── Agent timeline (loading or errors) ── */}
+      {showTimeline && (
+        <Card title="Pipeline execution — agent message passing">
+          <AgentTimeline
+            agents={PREDICTION_AGENTS}
+            loading={loading}
+            logs={pipelineLogs}
+            errors={pipelineErrors}
+          />
         </Card>
       )}
 
+      {/* ── Agent conversation ── */}
+      <Card title="Agent conversations — what each agent said to the next">
+        <AgentConversation
+          messages={agentMessages}
+          loading={loading}
+          agents={PREDICTION_AGENTS}
+        />
+      </Card>
+
+      {/* ── Top-level error ── */}
+      {error && pipelineErrors.length === 0 && (
+        <Card title="Prediction failed">
+          <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>
+        </Card>
+      )}
+
+      {/* ── Results ── */}
       {result && (
         <>
           {/* Summary cards */}
@@ -270,9 +313,7 @@ export default function Predict() {
                           <td className="py-2.5 pr-4">
                             <span
                               className={
-                                row.actual_churn
-                                  ? "text-red-400"
-                                  : "text-slate-500"
+                                row.actual_churn ? "text-red-400" : "text-slate-500"
                               }
                             >
                               {row.actual_churn ? "Yes" : "No"}

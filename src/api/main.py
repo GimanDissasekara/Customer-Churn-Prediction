@@ -77,6 +77,7 @@ async def train(file: Optional[UploadFile] = File(None)):
             "candidate_results": result["candidate_results"],
             "registry": result["registry_report"],
             "logs": result["logs"],
+            "agent_messages": result.get("agent_messages", []),
         }
     )
 
@@ -111,6 +112,8 @@ async def predict(file: UploadFile = File(...)):
             "risk_level_counts": result["prediction_report"]["risk_level_counts"],
             "avg_churn_probability": result["prediction_report"]["avg_churn_probability"],
             "predictions": predictions,
+            "logs": result.get("logs", []),
+            "agent_messages": result.get("agent_messages", []),
         }
     )
 

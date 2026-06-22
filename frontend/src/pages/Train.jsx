@@ -10,26 +10,50 @@ import {
   YAxis,
 } from "recharts";
 import { trainModel } from "../api";
+import AgentConversation from "../components/AgentConversation";
+import AgentTimeline from "../components/AgentTimeline";
 import Card from "../components/Card";
 import MetricGrid from "../components/MetricGrid";
 import Spinner from "../components/Spinner";
-import { CHART_TOOLTIP_STYLE, MODEL_LABELS } from "../lib/constants";
+import {
+  CHART_TOOLTIP_STYLE,
+  MODEL_LABELS,
+  TRAINING_AGENTS,
+} from "../lib/constants";
 
 export default function Train() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  // Raw errors/logs are kept separately so AgentTimeline can parse them by agent key
+  const [pipelineLogs, setPipelineLogs] = useState([]);
+  const [pipelineErrors, setPipelineErrors] = useState([]);
+  const [agentMessages, setAgentMessages] = useState([]);
 
   const handleTrain = async () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setPipelineLogs([]);
+    setPipelineErrors([]);
+    setAgentMessages([]);
     try {
       const res = await trainModel(file);
       setResult(res.data);
+      setPipelineLogs(res.data.logs ?? []);
+      setAgentMessages(res.data.agent_messages ?? []);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message);
+      const detail = err.response?.data?.detail;
+      const errList = Array.isArray(detail)
+        ? detail
+        : detail
+        ? [detail]
+        : [err.message];
+      setError(errList.join("\n"));
+      if (Array.isArray(detail)) setPipelineErrors(detail);
+      // Partial messages may exist on the error response
+      setAgentMessages(err.response?.data?.agent_messages ?? []);
     } finally {
       setLoading(false);
     }
@@ -44,6 +68,8 @@ export default function Train() {
       }))
     : [];
 
+  const showTimeline = loading || pipelineLogs.length > 0 || pipelineErrors.length > 0;
+
   return (
     <div className="space-y-6">
       <div>
@@ -55,6 +81,7 @@ export default function Train() {
         </p>
       </div>
 
+      {/* ── Controls ── */}
       <Card title="Training data">
         <div className="flex flex-col sm:flex-row sm:items-center gap-4">
           <input
@@ -83,28 +110,43 @@ export default function Train() {
         </p>
       </Card>
 
-      {loading && (
-        <Card>
-          <p className="text-slate-400 text-sm">
-            Running agents: ingestion → cleaning → feature engineering → training →
-            evaluation → registry. This may take up to a minute.
-          </p>
+      {/* ── Agent message-passing timeline ── */}
+      {showTimeline && (
+        <Card title="Pipeline execution — agent message passing">
+          <AgentTimeline
+            agents={TRAINING_AGENTS}
+            loading={loading}
+            logs={pipelineLogs}
+            errors={pipelineErrors}
+          />
         </Card>
       )}
 
-      {error && (
+      {/* ── Agent conversation ── */}
+      <Card title="Agent conversations — what each agent said to the next">
+        <AgentConversation
+          messages={agentMessages}
+          loading={loading}
+          agents={TRAINING_AGENTS}
+        />
+      </Card>
+
+      {/* ── Top-level API error (non-pipeline) ── */}
+      {error && pipelineErrors.length === 0 && (
         <Card title="Training failed">
-          <p className="text-red-400 text-sm whitespace-pre-wrap">
-            {Array.isArray(error) ? error.join("\n") : String(error)}
-          </p>
+          <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>
         </Card>
       )}
 
+      {/* ── Results ── */}
       {result && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-lg font-semibold">
-              Best model: {MODEL_LABELS[result.model_name] || result.model_name}
+              Best model:{" "}
+              <span className="text-indigo-400">
+                {MODEL_LABELS[result.model_name] || result.model_name}
+              </span>
             </h3>
             <span
               className={`px-3 py-1 rounded-full text-sm font-medium border ${
@@ -121,7 +163,7 @@ export default function Train() {
             <MetricGrid metrics={result.metrics} />
           </Card>
 
-          <Card title="Model comparison">
+          <Card title="Model comparison — ROC-AUC / F1 / Accuracy">
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={candidateData}>
@@ -133,20 +175,17 @@ export default function Train() {
                     fontSize={12}
                     tickFormatter={(v) => v.toFixed(2)}
                   />
-                  <Tooltip {...CHART_TOOLTIP_STYLE} formatter={(v) => v.toFixed(4)} />
+                  <Tooltip
+                    {...CHART_TOOLTIP_STYLE}
+                    formatter={(v) => v.toFixed(4)}
+                  />
                   <Legend />
                   <Bar dataKey="ROC-AUC" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="F1" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="F1"       fill="#22c55e" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Accuracy" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </Card>
-
-          <Card title="Pipeline log">
-            <pre className="text-xs text-slate-400 whitespace-pre-wrap leading-relaxed font-mono">
-              {(result.logs || []).join("\n")}
-            </pre>
           </Card>
         </>
       )}

@@ -54,6 +54,11 @@ class ChurnPipelineState(TypedDict, total=False):
     # --- Monitoring Agent outputs ---
     drift_report: Dict[str, Any]
 
+    # --- Inter-agent conversation messages ---
+    # Each dict: {"sender": str, "receiver": str, "content": str}
+    # Agents append one message per handoff so the UI can show the conversation.
+    agent_messages: List[Dict[str, Any]]
+
     # --- Bookkeeping ---
     errors: List[str]
     logs: List[str]
