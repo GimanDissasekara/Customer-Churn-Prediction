@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+mlruns/
+models/*.pkl
+models/*.json
+data/processed/*
